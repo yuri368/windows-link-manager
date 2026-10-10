@@ -32,7 +32,7 @@ class SourceReleaseTests(unittest.TestCase):
             ".gitignore",
         ):
             shutil.copy2(ROOT / name, self.source / name)
-        for name in ("linkmanager", "tests", "examples", "docs", "scripts", ".github"):
+        for name in ("linkmanager", "tests", "examples", "docs", "scripts", "packaging", ".github"):
             if (ROOT / name).is_dir():
                 shutil.copytree(ROOT / name, self.source / name,
                                 ignore=shutil.ignore_patterns("__pycache__"))
@@ -72,6 +72,9 @@ class SourceReleaseTests(unittest.TestCase):
                          "pyproject.toml", "launcher.ps1", "启动.vbs", "启动.cmd",
                          "演示.cmd", "linkmanager/__main__.py", "tests/test_launcher.py",
                          "scripts/build_release.py", ".github/workflows/release.yml",
+                         "scripts/build_windows.py", "scripts/windows_entry.py",
+                         "scripts/collect_dependency_sources.py", "scripts/smoke_windows.py",
+                         "packaging/windows-link-manager.iss", "docs/release-notes.md",
                          "examples/软链接.txt"):
                 self.assertIn(prefix + name, names)
             for name in private_files:
