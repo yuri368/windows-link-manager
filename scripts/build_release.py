@@ -22,8 +22,8 @@ ROOT_FILES = (
 PUBLIC_PATTERNS = (
     "linkmanager/*.py", "tests/*.py", "examples/*.txt",
     "docs/images/*.png", "docs/images/*.jpg", "docs/images/*.jpeg",
-    "docs/images/*.webp", "docs/images/*.svg",
-    "scripts/*.py", ".github/workflows/*.yml", ".github/workflows/*.yaml",
+    "docs/images/*.webp", "docs/images/*.svg", "docs/release-notes.md",
+    "scripts/*.py", "packaging/*.iss", ".github/workflows/*.yml", ".github/workflows/*.yaml",
 )
 
 
