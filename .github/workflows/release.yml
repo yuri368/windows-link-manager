@@ -1,0 +1,56 @@
+name: Source release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag matching the project version
+        type: string
+        required: true
+        default: v2.0.0
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Prepare the launcher's virtual environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test before publishing
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe -m unittest discover -v
+      - name: Build the versioned source ZIP
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe scripts/build_release.py --tag "$env:RELEASE_TAG"
+      - name: Publish the source ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $archive = Get-ChildItem -LiteralPath artifacts/releases -Filter '*-source.zip'
+          if ($archive.Count -ne 1) { throw 'Expected exactly one source release ZIP' }
+          gh release create "$env:RELEASE_TAG" $archive.FullName --target "$env:GITHUB_SHA" --generate-notes --title "Windows Link Manager $env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
