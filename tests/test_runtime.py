@@ -24,7 +24,7 @@ class RuntimePathsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="linkmanager-runtime-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
 
     def test_source_checkout_keeps_existing_config_and_history(self):
         (self.root / "pyproject.toml").write_text("", encoding="utf-8")
@@ -110,7 +110,7 @@ class RuntimeStartupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="linkmanager-first-run-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.paths = RuntimePaths(self.root, True)
 
     def test_first_run_opens_empty_editable_draft_without_writing_config(self):
