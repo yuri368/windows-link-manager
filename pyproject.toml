@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "windows-link-manager"
+description = "A Windows desktop manager for symbolic links and junctions"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Filesystems",
+]
+dynamic = ["version", "dependencies"]
+
+[project.gui-scripts]
+windows-link-manager = "linkmanager.main:main"
+
+[project.scripts]
+windows-link-manager-cli = "linkmanager.main:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "linkmanager.__version__"}
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["linkmanager"]
+namespaces = false
