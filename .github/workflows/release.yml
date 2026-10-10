@@ -1,4 +1,4 @@
-name: Source release
+name: Windows release
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
         description: Release tag matching the project version
         type: string
         required: true
-        default: v2.0.0
+        default: v2.0.1
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .venv
-          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt PyInstaller==6.22.3
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test before publishing
         shell: pwsh
@@ -45,12 +45,49 @@ jobs:
       - name: Build the versioned source ZIP
         shell: pwsh
         run: .\.venv\Scripts\python.exe scripts/build_release.py --tag "$env:RELEASE_TAG"
-      - name: Publish the source ZIP
+      - name: Collect corresponding dependency sources and notices
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe scripts/collect_dependency_sources.py
+      - name: Build the standalone Windows GUI
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe scripts/build_windows.py --tag "$env:RELEASE_TAG" --dependency-licenses artifacts/dependency-licenses
+      - name: Build the current-user installer
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $bundle = (Resolve-Path artifacts/build/windows/dist/WindowsLinkManager).Path
+          $output = (Resolve-Path artifacts/releases).Path
+          & $compiler "/DAppVersion=$($env:RELEASE_TAG.Substring(1))" "/DBundleDir=$bundle" "/DOutputDir=$output" packaging/windows-link-manager.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install and open the real bundled GUI without Python on PATH
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem -LiteralPath artifacts/releases -Filter '*-setup.exe'
+          if ($setup.Count -ne 1) { throw 'Expected one installer' }
+          $installed = Join-Path $env:RUNNER_TEMP 'Windows Link Manager installation test'
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/NOICONS', '/TASKS=', "/DIR=`"$installed`"")
+          $process = Start-Process -FilePath $setup.FullName -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          .\.venv\Scripts\python.exe scripts/smoke_windows.py --bundle "$installed" --screenshot artifacts/smoke/installed-gui.png
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content -LiteralPath (Join-Path $installed '软链接.txt') -Value '# User configuration must survive uninstall' -Encoding utf8
+          $state = Join-Path $installed '.state'
+          New-Item -ItemType Directory -Path $state -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $state 'user-history.txt') -Value 'User history must survive uninstall' -Encoding utf8
+          $uninstaller = Join-Path $installed 'unins000.exe'
+          $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
+          if (!(Test-Path -LiteralPath (Join-Path $installed '软链接.txt')) -or !(Test-Path -LiteralPath (Join-Path $state 'user-history.txt'))) { throw 'Uninstall removed user data' }
+          if (Test-Path -LiteralPath (Join-Path $installed 'WindowsLinkManager.exe')) { throw 'Uninstall did not remove the program' }
+      - name: Publish the installer, portable ZIP and corresponding sources
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $archive = Get-ChildItem -LiteralPath artifacts/releases -Filter '*-source.zip'
-          if ($archive.Count -ne 1) { throw 'Expected exactly one source release ZIP' }
-          gh release create "$env:RELEASE_TAG" $archive.FullName --target "$env:GITHUB_SHA" --generate-notes --title "Windows Link Manager $env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY"
+          $packages = @(Get-ChildItem -LiteralPath artifacts/releases -File)
+          if ($packages.Count -ne 3) { throw 'Expected source ZIP, portable ZIP and setup EXE' }
+          $sources = @(Get-ChildItem -LiteralPath artifacts/dependency-sources -Filter '*.tar.xz')
+          if ($sources.Count -ne 4) { throw 'Expected four corresponding Qt/PySide source archives' }
+          $assets = @($packages.FullName) + @($sources.FullName)
+          gh release create "$env:RELEASE_TAG" @assets --target "$env:GITHUB_SHA" --notes-file docs/release-notes.md --title "Windows Link Manager $env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
