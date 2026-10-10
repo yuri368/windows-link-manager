@@ -1,0 +1,18 @@
+# Windows Link Manager 配置模板（UTF-8）
+# 当前只有注释，导入后是空配置，不会产生待执行链接。
+# 将下面的示例路径改为实际路径，并去掉路径行开头的 # 后再使用。
+# 每对路径按“源、目标”排列。项目标题可保留。
+
+【目录示例】
+# H:\ExampleData\Documents
+# C:\ExampleWorkspace\Documents
+
+【文件示例】
+# 对文件符号链接，在实际路径前加入一行：# @type=file_symlink
+# H:\ExampleData\settings.json
+# C:\ExampleWorkspace\settings.json
+
+# 类型可选：junction、dir_symlink、file_symlink、hardlink。
+# 默认 junction；类型注释仅影响下一对路径。
+# 硬链接的源和目标必须在同一卷；符号链接需要开发者模式或相应权限。
+# 保存配置不会操作链接。请查看“预览并创建”的实际计划再确认执行。
