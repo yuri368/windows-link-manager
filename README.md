@@ -8,15 +8,22 @@ A compact Windows desktop manager for junctions, symbolic links and hard links, 
 
 ## 下载与启动
 
-需要 **Windows 10/11、64 位 Python 3.11–3.14**。当前依赖固定为 `PySide6==6.11.2`。
+普通用户需要 **Windows 10（1809 或更新版本）/Windows 11 x64**。从 [Releases](https://github.com/yuri368/windows-link-manager/releases/latest) 选择一种下载即可：
 
-1. 从 [Releases](https://github.com/yuri368/windows-link-manager/releases) 下载源码 ZIP，解压到当前用户可写的目录。
-2. 双击 `启动.vbs` 打开程序；也可使用 `启动.cmd`。
-3. 首次启动会创建项目独立的 `.venv` 并从 Python 包源安装依赖，需要网络。安装进度与失败信息记录在 `.state/launcher.log`。
+| 下载 | 如何打开 |
+| --- | --- |
+| `windows-link-manager-版本-windows-x64-setup.exe`（推荐） | 双击安装，完成后从开始菜单打开 Windows Link Manager。安装在当前用户目录，无需管理员权限。 |
+| `windows-link-manager-版本-windows-x64.zip`（便携版） | 解压到可写目录，双击 `WindowsLinkManager.exe`。请保留同目录的 `_internal` 文件夹。 |
 
-这是源码发布包，包含启动器；没有捆绑 Python、Qt 二进制或系统字体。程序也可直接从克隆的仓库启动。首次打开没有配置时会显示空列表，通过“新增”填写链接并保存即可。配置保存在程序目录的 `软链接.txt`。
+安装版和便携版均包含所需的 Python 运行环境和 Qt 库，**不用另装 Python，不用运行命令，也不用联网安装依赖**。第一次打开显示可编辑的空列表，通过“新增”填写链接并保存即可。
 
-双击 `演示.cmd` 可以先体验界面。演示模式在内存中模拟链接操作，不操作本机的真实链接；显式导出配置仍会保存到所选择的文件。
+配置保存在程序目录的 `软链接.txt`，操作历史在 `.state` 中。安装版升级前请保留这些文件；卸载器仅移除安装的程序文件，用户自行创建的配置和历史保留。便携版迁移时，请复制整个程序目录。
+
+### 从源码运行
+
+源码 ZIP 和克隆的仓库面向开发者，需要 **64 位 Python 3.11–3.14**，依赖固定为 `PySide6==6.11.2`。双击 `启动.vbs` 或 `启动.cmd`；首次启动创建独立的 `.venv` 并联网安装依赖，日志在 `.state/launcher.log`。
+
+源码版双击 `演示.cmd` 可以先体验界面；二进制版可运行 `WindowsLinkManager.exe --demo`。演示模式在内存中模拟链接操作；显式导出配置仍会保存到所选择的文件。
 
 ## 使用
 
@@ -88,6 +95,16 @@ $env:QT_QPA_PLATFORM = "offscreen"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe scripts/build_release.py
 ```
+
+构建 Windows 发行版（64 位 Windows，Inno Setup 6 用于生成安装器）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install PyInstaller==6.22.3
+.\.venv\Scripts\python.exe scripts/collect_dependency_sources.py
+.\.venv\Scripts\python.exe scripts/build_windows.py
+```
+
+`packaging/windows-link-manager.iss` 定义当前用户安装及快捷方式。Release 工作流会实际安装到临时目录并运行打包后的 GUI，测试通过后发布安装器、便携包、项目源码和对应版本的 Qt/PySide 源码附件。依赖源码附件用于开源授权履行和重建，普通用户无需下载。
 
 测试中的文件操作使用 TEMP 隔离目录，GUI 测试使用离屏模式。缺少符号链接权限时，对应真实符号链接子项会跳过。Windows CI 验证 Python 3.11 和 3.13；标记版本的 Release 工作流先运行测试，再发布源码 ZIP。
 
