@@ -118,21 +118,25 @@ class DemoService:
                         pending.append(normalize_path(entry.source))
 
     def preview(self, specs: list[LinkSpec], backup_existing: bool = False,
-                delete_existing: bool = False) -> list[PlanItem]:
+                delete_existing: bool = False, move_existing: bool = False) -> list[PlanItem]:
         error = ''
         try:
             self._validate(specs)
-            if backup_existing and delete_existing:
-                raise ValueError('备份与永久删除不能同时选择。')
+            if sum(map(bool, (backup_existing, delete_existing, move_existing))) > 1:
+                raise ValueError('备份、永久删除与移入源目录不能同时选择。')
         except (OSError, ValueError) as exception:
             error = str(exception)
         plan: list[PlanItem] = []
         for spec in specs:
             state = self.inspect(spec)
-            ordinary = state['target_kind'] == 'directory'
+            ordinary = state['target_kind'] in ('directory', 'file')
             item_error = error or (state['detail'] if state['target_kind'] == 'other' else '')
-            if ordinary and not (backup_existing or delete_existing):
-                item_error = item_error or '普通目标含有数据；请选择备份或永久删除后替换。'
+            if move_existing and spec.kind != 'junction':
+                item_error = item_error or '移入源目录后创建仅适用于交接点。'
+            if move_existing and state['target_kind'] == 'file':
+                item_error = item_error or '迁移目标必须为普通文件夹。'
+            if ordinary and not (backup_existing or delete_existing or move_existing):
+                item_error = item_error or '普通目标含有数据；请选择备份、迁移或永久删除后替换。'
             if item_error:
                 code = PlanAction.BLOCK
             elif delete_existing and state['target_exists']:
@@ -140,7 +144,7 @@ class DemoService:
             elif state['correct']:
                 code = PlanAction.SKIP
             elif ordinary:
-                code = PlanAction.BACKUP
+                code = PlanAction.MOVE_DATA if move_existing else PlanAction.BACKUP
             elif state['target_exists']:
                 code = PlanAction.REPLACE_LINK
             else:
@@ -154,6 +158,7 @@ class DemoService:
                          if code == PlanAction.BACKUP else '',
                          'backup_existing': bool(backup_existing),
                          'delete_existing': bool(delete_existing),
+                         'move_existing': bool(move_existing),
                          'irreversible': code == PlanAction.DELETE_DATA})
         return plan
 
@@ -181,7 +186,7 @@ class DemoService:
                 if not item['valid']:
                     raise ValueError('校验失败，未执行模拟操作。')
                 fresh = self.preview([item['spec']], item['backup_existing'],
-                                     item['delete_existing'])[0]
+                                     item['delete_existing'], item.get('move_existing', False))[0]
                 if (not fresh['valid'] or fresh['action_code'] != item['action_code']
                         or fresh['fingerprint'] != item['fingerprint']
                         or fresh['source'] != item['source'] or fresh['target'] != item['target']):
@@ -201,6 +206,7 @@ class DemoService:
                                    'before_virtual': asdict(before),
                                    'created_virtual': asdict(after),
                                    'backup': item.get('backup', ''),
+                                   'move_existing': item.get('action_code') == PlanAction.MOVE_DATA,
                                    'irreversible': item.get('irreversible', False)})
                 self.states[path_key(normalize_path(item['target']))] = after
             results.append({'project': spec.project, 'target': item['target'],
