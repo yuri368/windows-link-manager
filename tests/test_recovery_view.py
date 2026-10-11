@@ -47,6 +47,23 @@ class RecoveryDescriptionTests(unittest.TestCase):
             self.service.execute(self.service.preview([self.spec], backup_existing=backup))
         return self.service.history()[0]
 
+    def test_migration_preview_describes_return_even_when_target_root_is_unchanged(self):
+        self.target.mkdir()
+        (self.target / 'empty').mkdir()
+        with self.interrupt_phase('moving'):
+            with self.assertRaises(ProcessInterrupted):
+                self.service.execute(self.service.preview([self.spec], move_existing=True))
+        record = self.service.history()[0]
+        preview = self.service.preview_recovery(record['id'])
+        self.assertTrue(preview['success'], preview['message'])
+        message = preview['results'][0]['message']
+        self.assertIn('移回原目标目录', message)
+        self.assertNotIn('原入口尚未变动', message)
+        self.assertIn(str(self.source), message)
+        self.assertIn(str(self.target), message)
+        self.assertTrue((self.source / 'empty').is_dir())
+        self.assertTrue((self.target / 'empty').is_dir())
+
     def preview_without_changes(self, record):
         history = deepcopy(self.service.history())
         state_files = {str(path): path.read_bytes() for path in (self.root / 'state').rglob('*.json')}
