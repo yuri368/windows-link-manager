@@ -17,6 +17,7 @@ class PlanAction(StrEnum):
     CREATE = 'create'
     REPLACE_LINK = 'replace_link'
     BACKUP = 'backup'
+    MOVE_DATA = 'move_data'
     DELETE_LINK = 'delete_link'
     DELETE_DATA = 'delete_data'
 
@@ -27,6 +28,7 @@ ACTION_LABELS = {
     PlanAction.CREATE: '创建链接',
     PlanAction.REPLACE_LINK: '替换已有链接',
     PlanAction.BACKUP: '备份普通数据后创建',
+    PlanAction.MOVE_DATA: '移入源目录后创建交接点',
     PlanAction.DELETE_LINK: '删除已有链接后重建',
     PlanAction.DELETE_DATA: '永久删除目标及其内容后创建',
 }
@@ -81,7 +83,9 @@ class OperationRecord(TypedDict, total=False):
     phase: Literal['prepared', 'backup_pending', 'backed_up', 'remove_pending',
                    'old_removed', 'create_pending', 'created', 'delete_pending',
                    'target_deleted', 'irreversible_failure', 'remove_created_pending',
-                   'created_removed', 'restore_pending', 'restored', 'rolled_back', 'removed']
+                   'created_removed', 'restore_pending', 'restored', 'rolled_back', 'removed',
+                   'move_pending', 'moving', 'target_empty_pending', 'target_emptied',
+                   'move_restore_pending', 'move_restored']
     backup: str
     original_fingerprint: Fingerprint
     created_fingerprint: Fingerprint
@@ -93,6 +97,9 @@ class OperationRecord(TypedDict, total=False):
     parent_fingerprints: dict[str, Fingerprint]
     parent_pending: str
     delete_existing: bool
+    move_existing: bool
+    move_manifest: dict
+    move_journal: dict
     irreversible: bool
     deletion_attempted: bool
     deletion: str
@@ -115,6 +122,8 @@ class PlanItem(TypedDict):
     backup: str
     backup_existing: bool
     delete_existing: bool
+    move_existing: NotRequired[bool]
+    move_manifest: NotRequired[dict]
     fingerprint: dict
     deletion_fingerprint: NotRequired[str]
     irreversible: NotRequired[bool]
@@ -168,7 +177,7 @@ def can_recover(record: HistoryRecord) -> bool:
 class LinkManagerService(Protocol):
     def inspect(self, spec: LinkSpec) -> Inspection: ...
     def preview(self, specs: list[LinkSpec], backup_existing: bool = False,
-                delete_existing: bool = False) -> list[PlanItem]: ...
+                delete_existing: bool = False, move_existing: bool = False) -> list[PlanItem]: ...
     def execute(self, plan: list[PlanItem]) -> OperationResult: ...
     def unlink(self, specs: list[LinkSpec]) -> OperationResult: ...
     def history(self) -> list[HistoryRecord]: ...
