@@ -336,15 +336,35 @@ class UiTests(unittest.TestCase):
 
     def test_visible_policy_forwards_each_choice_to_service(self):
         self.window.select_visible(True)
-        for choice, flags in enumerate(((False, False), (True, False), (False, True))):
+        for choice, flags in enumerate(((False, False, False), (True, False, False),
+                                       (False, True, False), (False, False, True))):
             with self.subTest(choice=choice):
                 self.window.policy.setCurrentIndex(choice)
                 with patch.object(self.service, "preview", wraps=self.service.preview) as preview, patch.object(PreviewDialog, "exec", return_value=QDialog.DialogCode.Rejected):
                     self.window.preview_selected()
                     self.wait_task()
-                self.assertEqual(preview.call_args.kwargs, {"backup_existing": flags[0], "delete_existing": flags[1]})
-                self.assertEqual((self.window.backup.isChecked(), self.window.delete_existing.isChecked()), flags)
+                self.assertEqual(preview.call_args.kwargs, {"backup_existing": flags[0], "delete_existing": flags[1], "move_existing": flags[2]})
+                self.assertEqual((self.window.backup.isChecked(), self.window.delete_existing.isChecked(),
+                                  self.window.move_existing.isChecked()), flags)
         self.assertFalse(self.service.history())
+
+    def test_move_policy_is_exclusive_and_preview_explains_direction(self):
+        self.window.backup.setChecked(True)
+        self.window.move_existing.setChecked(True)
+        self.assertFalse(self.window.backup.isChecked())
+        self.assertFalse(self.window.delete_existing.isChecked())
+        self.assertEqual(self.window.policy.currentIndex(), 3)
+        spec = next(spec for spec in self.window.specs if 'Pictures' in spec.target)
+        plan = self.service.preview([spec], move_existing=True)
+        dialog = PreviewDialog(plan, self.window, True)
+        self.addCleanup(dialog.deleteLater)
+        detail = dialog.table.item(0, 3).text()
+        self.assertIn(spec.target + ' → ' + spec.source, detail)
+        self.assertIn('同名文件不覆盖', detail)
+        self.assertIn('演示仅模拟迁移', detail)
+        self.assertFalse(dialog.delete_consent.isVisible())
+        dialog.consent.setChecked(True)
+        self.assertTrue(dialog.run_button.isEnabled())
 
     def test_delete_preview_marks_only_actual_data_loss_as_danger(self):
         plan = self.service.preview(self.window.specs, delete_existing=True)
