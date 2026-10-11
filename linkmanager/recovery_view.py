@@ -19,6 +19,10 @@ def recovery_message(operation: Mapping, *, already_restored: bool = False,
     distinguish an original entry that never changed from an entry to restore.
     """
     backup = operation.get('backup', '')
+    if operation.get('move_existing') and operation.get('phase') != 'prepared':
+        # The target directory can keep its identity while some contents have
+        # moved, or while new merge directories have appeared in the source.
+        original_untouched = False
     if demo:
         before = operation.get('before_virtual', {})
         kind = before.get('kind')
@@ -45,6 +49,15 @@ def recovery_message(operation: Mapping, *, already_restored: bool = False,
             raise ValueError('原链接类型或指向不完整，无法列出可核对的恢复计划。')
         original_detail = f'原链接类型：{label}\n原指向：{source}'
         restore_action = '恢复旧链接入口；原链接源数据保留。'
+    elif original_exists and operation.get('move_existing'):
+        source = operation.get('source')
+        target = operation.get('target')
+        if not source or not target:
+            raise ValueError('迁移路径信息不完整，无法列出恢复计划。')
+        original_detail = f'本次迁移方向：{target} → {source}\n恢复方向：{source} → {target}'
+        restore_action = '将本次迁入的内容移回原目标目录；源目录原有内容保留。'
+        if demo:
+            original_detail += '\n仅模拟恢复迁移前状态，不操作真实文件。'
     elif original_exists and backup:
         backup_label = ('恢复所用备份路径' if already_restored else
                         '计划备份路径（原数据尚未移动）' if original_untouched else
@@ -65,6 +78,9 @@ def recovery_message(operation: Mapping, *, already_restored: bool = False,
         action = '已恢复到操作前状态；保持现状。'
     elif original_untouched:
         action = '原入口尚未变动；保持现有入口或普通数据。'
+    elif operation.get('move_existing') and operation.get('phase') in (
+            'move_pending', 'moving', 'target_empty_pending', 'move_restore_pending', 'move_restored'):
+        action = restore_action
     elif not original_exists:
         action = ('仅移除本次创建的链接入口；' if target_exists else '入口已不存在；') + restore_action
     else:
