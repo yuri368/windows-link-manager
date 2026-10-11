@@ -147,6 +147,28 @@ class DemoSemanticsTests(unittest.TestCase):
         self.assertFalse(self.service.preview_recovery(record['id'])['success'])
         self.assertFalse(self.service.recover(record['id'])['success'])
 
+    def test_move_target_directory_can_be_undone_and_recovery_names_both_paths(self):
+        spec = next(spec for spec in self.specs if 'Pictures' in spec.target)
+        before = self.service.states.copy()
+        plan = self.service.preview([spec], move_existing=True)
+        self.assertEqual(plan[0]['action_code'], PlanAction.MOVE_DATA)
+        self.assertTrue(self.service.execute(plan)['success'])
+        record = self.service.records[-1]
+        record.update(state='pending', success=False, recovery_required=True)
+        preview = self.service.preview_recovery(record['id'])
+        self.assertTrue(preview['success'], preview['message'])
+        self.assertIn(spec.source, preview['results'][0]['message'])
+        self.assertIn(spec.target, preview['results'][0]['message'])
+        self.assertIn('源目录原有内容保留', preview['results'][0]['message'])
+        self.assertTrue(self.service.recover(record['id'])['success'])
+        self.assertEqual(self.service.states, before)
+
+    def test_move_policy_rejects_other_link_types_and_conflicting_flags(self):
+        spec = self.specs[-1]
+        self.assertFalse(self.service.preview([spec], move_existing=True)[0]['valid'])
+        ordinary = next(spec for spec in self.specs if 'Pictures' in spec.target)
+        self.assertFalse(self.service.preview([ordinary], backup_existing=True, move_existing=True)[0]['valid'])
+
 
 if __name__ == '__main__':
     unittest.main()
