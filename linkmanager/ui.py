@@ -257,7 +257,7 @@ class PreviewDialog(QDialog):
         layout.addWidget(label("检查本次变更", "section"))
         layout.addWidget(label("逐项列出链接入口、实际数据与备份位置。执行前会重新检查状态，避免覆盖预览后出现的新内容。", "muted", True))
         self.table = QTableWidget(len(plan), 4)
-        self.table.setHorizontalHeaderLabels(["项目 / 类型", "计划操作", "目标 · 链接入口", "源 / 备份 / 校验信息"])
+        self.table.setHorizontalHeaderLabels(["项目 / 类型", "计划操作", "目标 · 链接入口", "源 / 迁移 / 备份 / 校验信息"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
@@ -269,6 +269,17 @@ class PreviewDialog(QDialog):
             detail = str(item.get("error") or ("源：" + item.get("source", spec.source)))
             if item.get("backup"):
                 detail += "\n备份：" + str(item["backup"])
+            elif item.get("action_code") == PlanAction.MOVE_DATA:
+                detail += "\n迁移：" + item.get("target", spec.target) + " → " + item.get("source", spec.source)
+                entries = item.get("move_manifest", {}).get("target_entries")
+                if entries is not None:
+                    files = sum(entry.get("kind") == "file" for entry in entries.values())
+                    folders = sum(path != "." and entry.get("kind") == "directory" for path, entry in entries.items())
+                    detail += f"\n预检内容：{files} 个文件、{folders} 个子目录。"
+                detail += "\n先合并目标内容，再创建交接点；同名文件不覆盖。"
+                detail += "\n撤销时移回本次迁入的内容，源目录原有内容保留。"
+                if demo:
+                    detail += "\n演示仅模拟迁移，不检查或移动真实文件。"
             elif item.get("action_code") == PlanAction.DELETE_DATA:
                 detail += "\n不备份；普通目标内容永久删除，无法恢复。"
             elif item.get("action_code") == PlanAction.DELETE_LINK:
@@ -317,7 +328,7 @@ class HistoryDialog(QDialog):
         self.resize(900, 540)
         layout = QVBoxLayout(self)
         layout.addWidget(label("操作历史", "section"))
-        layout.addWidget(label("创建记录可尝试撤销：先核对链接仍与记录一致，再移除入口并恢复该次备份。发生外部变化时会停止。", "muted", True))
+        layout.addWidget(label("创建记录可尝试撤销：先核对记录，再移除入口并恢复备份或移回本次迁入的内容。发生外部变化时会停止。", "muted", True))
         self.table = QTableWidget(len(records), 4)
         self.table.setHorizontalHeaderLabels(["时间", "操作", "结果", "说明"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -372,7 +383,7 @@ class HistoryDialog(QDialog):
         row = self.table.currentRow()
         if row < 0:
             return
-        if QMessageBox.question(self, "确认撤销", "将核对所选创建记录并恢复备份。链接或备份已被外部修改时会拒绝。继续？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "确认撤销", "将核对所选创建记录，恢复备份或移回本次迁入的内容。链接、备份或迁移内容已被外部修改时会拒绝。继续？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             self.undo_id = self.records[row]["id"]
             self.accept()
 
@@ -405,7 +416,7 @@ class RecoveryDialog(QDialog):
                 table.setItem(row, column, cell)
         confirmation_table(table)
         layout.addWidget(table, 1)
-        layout.addWidget(label("确认后会再次检查链接和备份，发生外部变化时拒绝恢复。永久删除的数据不能恢复。", "muted", True))
+        layout.addWidget(label("确认后会再次检查链接、备份和迁移内容，发生外部变化时拒绝恢复。永久删除的数据不能恢复。", "muted", True))
         self.consent = QCheckBox("我已核对以上路径及计划，确认执行恢复。")
         layout.addWidget(self.consent)
         actions = QHBoxLayout()
@@ -645,10 +656,10 @@ class MainWindow(QMainWindow):
         # logic; the visible control offers one mutually exclusive policy.
         self.backup = QCheckBox("备份后替换", self)
         self.delete_existing = QCheckBox("永久删除后创建", self)
+        self.move_existing = QCheckBox("移入源目录后创建交接点", self)
         self.backup.hide()
         self.delete_existing.hide()
-        self.backup.toggled.connect(lambda checked: self.delete_existing.setChecked(False) if checked else None)
-        self.delete_existing.toggled.connect(lambda checked: self.backup.setChecked(False) if checked else None)
+        self.move_existing.hide()
         batch_frame = QFrame()
         batch_frame.setObjectName("batchbar")
         batch = QHBoxLayout(batch_frame)
@@ -656,14 +667,15 @@ class MainWindow(QMainWindow):
         batch.setSpacing(6)
         batch.addWidget(label("目标策略", "muted"))
         self.policy = QComboBox()
-        self.policy.addItems(["保护普通目标", "备份后替换", "永久删除后创建"])
+        self.policy.addItems(["保护普通目标", "备份后替换", "永久删除后创建", "移入源目录后创建交接点"])
         self.policy.setMinimumWidth(155)
-        self.policy.setToolTip("保护：拒绝覆盖普通数据。备份：重命名保留原目标。永久删除：不备份且不可恢复，执行前须再次确认。")
+        self.policy.setToolTip("保护普通目标、备份后替换、永久删除，或先将目标内容移入源目录再创建交接点。")
         self.policy.currentIndexChanged.connect(self.set_policy)
         self.backup.toggled.connect(self.sync_policy)
         self.delete_existing.toggled.connect(self.sync_policy)
+        self.move_existing.toggled.connect(self.sync_policy)
         batch.addWidget(self.policy)
-        self.mutating_controls.extend((self.backup, self.delete_existing, self.policy))
+        self.mutating_controls.extend((self.backup, self.delete_existing, self.move_existing, self.policy))
         batch.addStretch(1)
         self.refresh_button = button("刷新", self.refresh)
         batch.addWidget(self.refresh_button)
@@ -748,20 +760,27 @@ class MainWindow(QMainWindow):
         self.menuBar().addMenu("帮助").addAction("使用帮助", self.show_help)
 
     def set_policy(self, index):
-        self.backup.blockSignals(True)
-        self.delete_existing.blockSignals(True)
-        self.backup.setChecked(index == 1)
-        self.delete_existing.setChecked(index == 2)
-        self.backup.blockSignals(False)
-        self.delete_existing.blockSignals(False)
+        for choice, control in enumerate((self.backup, self.delete_existing, self.move_existing), 1):
+            control.blockSignals(True)
+            control.setChecked(index == choice)
+            control.blockSignals(False)
         self.sync_policy()
 
     def sync_policy(self, *_):
-        index = 2 if self.delete_existing.isChecked() else 1 if self.backup.isChecked() else 0
+        controls = (self.backup, self.delete_existing, self.move_existing)
+        selected = self.sender()
+        if selected in controls and selected.isChecked():
+            for control in controls:
+                if control is not selected:
+                    control.blockSignals(True)
+                    control.setChecked(False)
+                    control.blockSignals(False)
+        index = next((choice for choice, control in enumerate(controls, 1) if control.isChecked()), 0)
         self.policy.blockSignals(True)
         self.policy.setCurrentIndex(index)
         self.policy.blockSignals(False)
-        self.policy.setToolTip("永久删除普通目标及其全部内容，不备份且不可恢复；执行前须再次确认。" if index == 2 else
+        self.policy.setToolTip("将普通目标目录的内容移入源目录，再创建交接点；递归合并目录，同名文件或类型冲突会阻止整批执行。" if index == 3 else
+                               "永久删除普通目标及其全部内容，不备份且不可恢复；执行前须再次确认。" if index == 2 else
                                "同目录重命名保留普通目标，预览显示备份路径。" if index == 1 else
                                "拒绝覆盖普通文件或文件夹；仅创建或修正链接入口。")
 
@@ -1119,11 +1138,12 @@ class MainWindow(QMainWindow):
             return
         backup = self.backup.isChecked()
         delete_existing = self.delete_existing.isChecked()
+        move_existing = self.move_existing.isChecked()
         def ready(plan):
             dialog = PreviewDialog(plan, self, self.demo)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.start_task(lambda: (self.service.execute(plan), self.collect_status()), self.operation_done, "正在创建链接并验证结果…")
-        self.start_task(lambda: self.service.preview(specs, backup_existing=backup, delete_existing=delete_existing), ready, "正在校验所选路径与变更计划…", read_only=True)
+        self.start_task(lambda: self.service.preview(specs, backup_existing=backup, delete_existing=delete_existing, move_existing=move_existing), ready, "正在校验所选路径与变更计划…", read_only=True)
 
     def unlink_selected(self):
         specs = self.selected_specs()
@@ -1214,7 +1234,7 @@ class MainWindow(QMainWindow):
             self.feedback.setText("已复制源路径与目标路径。")
 
     def show_help(self):
-        QMessageBox.information(self, "链接管理器使用帮助", "1. 按项目管理链接配置，勾选需要处理的记录。\n2. 源是已有数据位置，目标是应用访问的链接入口。\n3. 点击“预览并创建”，检查路径后确认执行。\n4. 不勾选替换选项时保护普通数据；可选“备份后替换”或“永久删除后创建”。\n5. 原版删除功能：先永久删除目标及其内容，再创建链接，不备份，不可恢复；已有正确链接也会移除后重建。\n6. “仅移除链接”保留源数据。含永久删除的创建记录不能撤销恢复普通数据。\n7. 编辑配置不会立即操作磁盘；Ctrl+S 保存配置。\n\n类型：目录交接点、目录符号链接、文件符号链接、文件硬链接。\n符号链接可能需要开发者模式或管理员权限；硬链接必须同卷。")
+        QMessageBox.information(self, "链接管理器使用帮助", "1. 按项目管理链接配置，勾选需要处理的记录。\n2. 源是已有数据位置，目标是应用访问的链接入口。\n3. 点击“预览并创建”，检查路径后确认执行。\n4. 不勾选替换选项时保护普通数据；可选“备份后替换”“永久删除后创建”，或“移入源目录后创建交接点”（仅 Junction；同名文件不覆盖）。\n5. 原版删除功能：先永久删除目标及其内容，再创建链接，不备份，不可恢复；已有正确链接也会移除后重建。\n6. “仅移除链接”保留源数据。含永久删除的创建记录不能撤销恢复普通数据。\n7. 编辑配置不会立即操作磁盘；Ctrl+S 保存配置。\n\n类型：目录交接点、目录符号链接、文件符号链接、文件硬链接。\n符号链接可能需要开发者模式或管理员权限；硬链接必须同卷。")
 
     def closeEvent(self, event):
         if self.busy:
