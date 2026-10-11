@@ -1,14 +1,18 @@
-本版补齐普通用户可直接打开的 Windows 程序。
+本版新增目标策略：**移入源目录后创建交接点**。
+
+选择此策略后，程序先将普通目标文件夹的内容移入源文件夹，再把原目标创建为指向源的 Junction。源原有文件保留；同名文件夹递归合并，同名文件或类型冲突会阻止执行，不覆盖数据。仅支持普通文件和目录，目录内的链接或其他特殊入口会在预检时拒绝。
+
+操作预览会显示迁移方向。迁移失败时尝试回滚；历史撤销只移回本次迁入内容。迁入内容被外部修改时停止自动恢复，保留当前数据。
 
 ## 推荐下载：安装版
 
-下载 `windows-link-manager-2.0.1-windows-x64-setup.exe`，双击安装，完成后从开始菜单打开 **Windows Link Manager**。默认安装在当前用户目录，无需管理员权限。
+下载 `windows-link-manager-2.0.2-windows-x64-setup.exe`，双击安装，完成后从开始菜单打开 **Windows Link Manager**。默认安装在当前用户目录，无需管理员权限。
 
 **不需要安装 Python，不需要运行命令，使用时不需要联网安装依赖。** 需要 Windows 10（1809 或更新版本）/Windows 11 x64。
 
 ## 便携版
 
-下载 `windows-link-manager-2.0.1-windows-x64.zip`，解压后双击 `WindowsLinkManager.exe`。保留同目录的 `_internal` 文件夹，迁移时复制整个目录。
+下载 `windows-link-manager-2.0.2-windows-x64.zip`，解压后双击 `WindowsLinkManager.exe`。保留同目录的 `_internal` 文件夹，迁移时复制整个目录。
 
 首次打开显示可编辑的空列表，可通过“新增”配置链接。程序支持 Junction、目录和文件符号链接、硬链接，以及项目分组、搜索、浅色/深色外观、操作预览、备份和恢复历史。
 
