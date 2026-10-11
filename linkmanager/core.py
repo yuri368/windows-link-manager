@@ -24,6 +24,7 @@ from .windows_backend import (JUNCTION_TAG, SYMLINK_TAG, create_junction as _jun
                               create_link as _create)
 from .history import HistoryRepository
 from .planning import ordered_indices
+from . import migration
 from .recovery_view import recovery_message
 from .models import (ACTION_LABELS, Fingerprint, HistoryRecord, HistoryState,
                      Inspection, OperationRecord, OperationResult, PlanAction,
@@ -450,11 +451,11 @@ class LinkService:
         return pairs
 
     def preview(self, specs: list[LinkSpec], backup_existing: bool = False,
-                delete_existing: bool = False) -> list[PlanItem]:
+                delete_existing: bool = False, move_existing: bool = False) -> list[PlanItem]:
         plan: list[PlanItem] = []
         try:
-            if backup_existing and delete_existing:
-                raise ValueError('备份已有数据与永久删除目标不能同时启用')
+            if sum(bool(flag) for flag in (backup_existing, delete_existing, move_existing)) > 1:
+                raise ValueError('备份已有数据、永久删除目标与移入源目录不能同时启用')
             self._validate(specs)
             batch_error = ''
         except (OSError, ValueError) as error:
@@ -465,7 +466,7 @@ class LinkService:
                     'valid': False, 'error': batch_error,
                     'status': '检查失败', 'backup': '', 'fingerprint': {},
                     'backup_existing': bool(backup_existing),
-                    'delete_existing': bool(delete_existing)}
+                    'delete_existing': bool(delete_existing), 'move_existing': bool(move_existing)}
             try:
                 source, target = _path(spec.source), _path(spec.target)
                 item.update(source=str(source), target=str(target))
@@ -474,8 +475,15 @@ class LinkService:
                 if batch_error:
                     plan.append(item)
                     continue
+                if move_existing and spec.kind != 'junction':
+                    raise ValueError('移入源目录仅支持 Junction（交接点）')
                 kind = inspected['target_kind']
-                if delete_existing and kind not in ('missing', 'unknown_reparse', 'other'):
+                if move_existing and kind in ('directory', 'file', 'hardlink'):
+                    if spec.kind != 'junction' or kind != 'directory':
+                        raise ValueError('移入源目录仅允许 Junction 的普通目标文件夹')
+                    item['action_code'] = PlanAction.MOVE_DATA
+                    item['move_manifest'] = migration.manifest(source, target, _fingerprint)
+                elif delete_existing and kind not in ('missing', 'unknown_reparse', 'other'):
                     if kind in ('junction', 'dir_symlink', 'file_symlink', 'hardlink'):
                         item['action_code'] = PlanAction.DELETE_LINK
                     else:
@@ -494,7 +502,7 @@ class LinkService:
                     item['action_code'] = PlanAction.BACKUP
                     item['backup'] = str(target.with_name(target.name + '.linkmanager-backup-' + uuid.uuid4().hex[:12]))
                 else:
-                    raise ValueError('目标已有普通数据；请启用“先备份已有数据”或“永久删除目标后创建”')
+                    raise ValueError('目标已有普通数据；请选择先备份、移入源目录或永久删除目标后创建')
                 item['fingerprint'] = _plan_fingerprint(source, target)
                 item['action'] = ACTION_LABELS[item['action_code']]
                 item['valid'] = True
@@ -502,6 +510,12 @@ class LinkService:
                 item.update(valid=False, error=str(error), action=ACTION_LABELS[PlanAction.BLOCK],
                             action_code=PlanAction.BLOCK)
             plan.append(item)
+        try:
+            migration.validate_batch(plan)
+        except ValueError as error:
+            for item in plan:
+                item.update(valid=False, error=str(error), action=ACTION_LABELS[PlanAction.BLOCK],
+                            action_code=PlanAction.BLOCK)
         return plan
 
     def history(self) -> list[HistoryRecord]:
@@ -557,6 +571,7 @@ class LinkService:
                     raise ValueError('预览中存在被阻止的项目，整批操作未执行')
                 specs = [p['spec'] for p in plan]
                 pairs = self._validate(specs)
+                migration.validate_batch(plan)
                 ordered = self._ordered_batch(plan, pairs)
                 # Validate every item before even writing the pending transaction.
                 for item, (source, target) in zip(plan, pairs):
@@ -571,9 +586,11 @@ class LinkService:
                     if item.get('backup') and _exists(_path(item['backup'])):
                         raise ValueError(f'备份路径已存在：{item["backup"]}')
                     fresh = self.preview([item['spec']], bool(item.get('backup_existing')),
-                                         bool(item.get('delete_existing')))[0]
+                                         bool(item.get('delete_existing')), bool(item.get('move_existing')))[0]
                     if not fresh['valid'] or fresh['action_code'] != item.get('action_code'):
                         raise ValueError(f'操作条件已变化：{target}')
+                    if item.get('move_manifest') != fresh.get('move_manifest'):
+                        raise ValueError(f'预览后迁移内容或源目录发生变化，请重新预览：{target}')
                 record = self._record('create')
                 for item, (source, target) in ordered:
                     self._validate(specs)
@@ -581,7 +598,12 @@ class LinkService:
                                        for raw, fingerprint in previous.get('parent_fingerprints', {}).items()}
                     _check_parent_identity(target, item['fingerprint'], created_parents)
                     hardlink = item['spec'].kind == 'hardlink'
-                    if not _matches_fingerprint(source, item['fingerprint']['source'], hardlink) or not _matches_fingerprint(target, item['fingerprint']['target'], hardlink):
+                    source_matches = _matches_fingerprint(source, item['fingerprint']['source'], hardlink)
+                    if item.get('move_manifest'):
+                        # A preceding migration may add siblings to a shared
+                        # source. Its identity and each destination are rechecked.
+                        source_matches = migration._same_identity(_fingerprint(source), item['fingerprint']['source'])
+                    if not source_matches or not _matches_fingerprint(target, item['fingerprint']['target'], hardlink):
                         raise ValueError(f'执行期间源或目标发生变化：{target}')
                     if item.get('delete_existing') and item.get('deletion_fingerprint'):
                         _deletion_inventory(target)
@@ -597,7 +619,10 @@ class LinkService:
                                  'backup': item.get('backup', ''), 'phase': 'prepared', 'parents': [],
                                  'original_fingerprint': _fingerprint(target),
                                  'delete_existing': bool(item.get('delete_existing')),
+                                 'move_existing': item.get('action_code') == PlanAction.MOVE_DATA,
                                  'irreversible': False}
+                    if operation['move_existing']:
+                        operation['move_manifest'] = item['move_manifest']
                     old_kind = _kind(target, source)
                     if old_kind in ('junction', 'dir_symlink', 'file_symlink'):
                         operation['old_link'] = {'kind': old_kind, 'source': str(_readlink(target))}
@@ -608,7 +633,13 @@ class LinkService:
                     self._ensure_parents(target, operation, record)
                     created_parents.update(operation.get('parent_fingerprints', {}))
                     _check_parent_identity(target, item['fingerprint'], created_parents)
-                    if operation['delete_existing'] and old_kind != 'missing':
+                    if operation['move_existing']:
+                        known_source_dirs = {str(_path(previous['source']) / relative): fingerprint
+                                             for previous in record['operations'][:-1]
+                                             for relative, fingerprint in previous.get('move_journal', {}).get('created_dirs', {}).items()}
+                        migration.move(source, target, operation, _fingerprint, lambda: self._store(record),
+                                       known_source_dirs=known_source_dirs)
+                    elif operation['delete_existing'] and old_kind != 'missing':
                         operation['deletion_fingerprint'] = item['deletion_fingerprint']
                         operation['phase'] = 'delete_pending'
                         operation['deletion'] = 'pending'
@@ -649,6 +680,8 @@ class LinkService:
                     if not self.inspect(item['spec'])['correct']:
                         raise OSError(f'创建后的链接验证失败：{target}')
                     detail = '已创建并验证链接'
+                    if operation['move_existing']:
+                        detail += '；原目标内容已移入源目录，撤销时仅退回本次迁移数据'
                     if operation['delete_existing']:
                         detail += '；未备份'
                     if operation['irreversible']:
@@ -727,6 +760,21 @@ class LinkService:
             if not expected or not _matches_fingerprint(target, expected, operation['spec']['kind'] == 'hardlink'):
                 raise ValueError('已回滚的入口再次改变，拒绝继续恢复')
             return
+        if operation.get('move_existing'):
+            source = _path(operation['source'])
+            linked = _reparse(target)
+            if linked:
+                expected = operation.get('created_fingerprint')
+                if (not expected or not _matches_fingerprint(target, expected)
+                        or not self.inspect(LinkSpec(**operation['spec']))['correct']):
+                    raise ValueError('迁移后创建的链接已改变或身份未记录，拒绝恢复')
+            elif operation.get('phase') == 'created':
+                raise ValueError('迁移后创建的链接已被外部删除，拒绝自动撤销')
+            if operation.get('phase') == 'prepared':
+                if migration.manifest(source, target, _fingerprint) != operation.get('move_manifest'):
+                    raise ValueError('准备阶段迁移内容已改变，拒绝自动恢复')
+            migration.check_restore(source, target, operation, _fingerprint, linked=linked)
+            return
         if operation.get('phase') == 'restore_pending' and self._restoration_completed(operation):
             return
         if operation.get('phase') == 'restored':
@@ -804,6 +852,19 @@ class LinkService:
             return
         self._check_revert(operation)
         target = _path(operation['target'])
+        if operation.get('move_existing'):
+            if _reparse(target):
+                operation['phase'] = 'remove_created_pending'
+                if checkpoint:
+                    checkpoint()
+                _remove_link(target, operation['spec']['kind'], _path(operation['source']),
+                             operation.get('created_fingerprint'))
+                operation['phase'] = 'created_removed'
+                if checkpoint:
+                    checkpoint()
+            migration.restore(_path(operation['source']), target, operation, _fingerprint,
+                              checkpoint or (lambda: None))
+            return
         if operation.get('phase') == 'restore_pending' and self._restoration_completed(operation):
             operation['phase'] = 'restored'
             operation['restored_fingerprint'] = _fingerprint(target)
@@ -913,6 +974,10 @@ class LinkService:
                 transaction = self._record('undo')
                 transaction['undo_of'] = record_id
                 self._store(transaction)
+                # A terminated process bypasses exception handlers. Keep the
+                # original journal recoverable before the first reverse change.
+                record['recovery_required'] = True
+                self._store(record)
                 for operation in reversed(record['operations']):
                     self._revert(operation, lambda: self._store(record))
                     operation['phase'] = 'rolled_back'
@@ -954,7 +1019,8 @@ class LinkService:
         known_phases = {'prepared', 'backup_pending', 'backed_up', 'remove_pending',
                         'old_removed', 'create_pending', 'created', 'remove_created_pending',
                         'created_removed', 'restore_pending', 'restored', 'rolled_back',
-                        'delete_pending', 'target_deleted'}
+                        'delete_pending', 'target_deleted', 'move_pending', 'moving',
+                        'target_empty_pending', 'target_emptied', 'move_restore_pending', 'move_restored'}
         for operation in record.get('operations', []):
             try:
                 spec = LinkSpec(**operation['spec'])
@@ -972,10 +1038,13 @@ class LinkService:
                 ordinary = (not original.get('tag') and not stat.S_ISLNK(original['mode']))
                 if ordinary and operation.get('delete_existing') and operation.get('old_link', {}).get('kind') != 'hardlink':
                     raise ValueError('记录涉及普通目标的永久删除，拒绝自动恢复')
-                if ordinary and not operation.get('backup') and not operation.get('old_link'):
+                if ordinary and not operation.get('backup') and not operation.get('old_link') and not operation.get('move_existing'):
                     raise ValueError('原数据没有可核验的备份，拒绝自动恢复')
                 if not ordinary and not operation.get('old_link'):
                     raise ValueError('原链接信息缺失，拒绝自动恢复')
+            if operation.get('move_existing') and (spec.kind != 'junction' or not stat.S_ISDIR(original.get('mode', 0))
+                                                   or original.get('tag') or stat.S_ISLNK(original.get('mode', 0))):
+                raise ValueError('迁移历史不是 Junction 普通目录，拒绝恢复')
             # A journal interrupted between mkdir and its identity checkpoint
             # cannot distinguish our directory from an external replacement.
             pending_parent = operation.get('parent_pending')
@@ -1006,7 +1075,7 @@ class LinkService:
                 for operation in reversed(record.get('operations', [])):
                     target = _path(operation['target'])
                     target_exists = _exists(target)
-                    already_restored = (operation.get('phase') in ('restored', 'rolled_back')
+                    already_restored = (operation.get('phase') in ('restored', 'rolled_back', 'move_restored')
                                         or (operation.get('phase') == 'restore_pending'
                                             and self._restoration_completed(operation)))
                     original_untouched = (
